@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Milano Quartieri — Intelligenza Urbana</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Inter',system-ui,sans-serif;display:flex;height:100vh;background:#0a0e13;color:#c9d1d9;overflow:hidden;}
+
+  /* ===== SIDEBAR ===== */
+  #sidebar{width:360px;min-width:360px;background:#0d1117;display:flex;flex-direction:column;border-right:1px solid #21262d;overflow:hidden;}
+
+  .s-head{padding:20px 18px 14px;border-bottom:1px solid #21262d;}
+  .s-head h1{font-size:20px;font-weight:800;color:#e6edf3;letter-spacing:-0.5px;}
+  .s-head h1 span{color:#58a6ff;}
+  .s-head p{font-size:11px;color:#484f58;margin-top:3px;font-weight:400;}
+
+  /* KPI strip */
+  .kpi-strip{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #21262d;}
+  .kpi{padding:12px 8px;text-align:center;border-right:1px solid #161b22;}
+  .kpi:last-child{border:none;}
+  .kpi-v{font-size:17px;font-weight:700;color:#e6edf3;}
+  .kpi-l{font-size:8px;color:#484f58;text-transform:uppercase;letter-spacing:0.6px;margin-top:2px;font-weight:500;}
+
+  /* Controls */
+  .ctrl{padding:10px 18px;border-bottom:1px solid #161b22;}
+  .ctrl-label{font-size:9px;color:#484f58;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;margin-bottom:6px;}
+
+  /* Layer pills */
+  .pills{display:flex;flex-wrap:wrap;gap:4px;}
+  .pill{padding:5px 11px;border-radius:20px;border:1px solid #30363d;background:#161b22;color:#8b949e;font-size:10px;cursor:pointer;transition:all .15s;font-weight:500;}
+  .pill:hover{border-color:#58a6ff;color:#c9d1d9;}
+  .pill.on{border-color:#58a6ff;background:#0d2240;color:#58a6ff;font-weight:600;}
+
+  /* Ranking controls */
+  .rank-controls{padding:8px 18px;display:flex;justify-content:space-between;align-items:center;}
+  .rank-title{font-size:9px;color:#484f58;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;}
+  select{padding:4px 8px;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:10px;font-family:inherit;}
+
+  /* Ranking list */
+  .rank-list{flex:1;overflow-y:auto;padding:0 18px 10px;}
+  .rank-item{display:flex;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px;transition:all .12s;border:1px solid transparent;}
+  .rank-item:hover{background:#161b22;}
+  .rank-item.selected{background:#0d2240;border-color:#1f3d5e;}
+  .rank-pos{width:22px;font-size:12px;font-weight:700;color:#484f58;flex-shrink:0;}
+  .rank-pos.top3{color:#58a6ff;}
+  .rank-body{flex:1;min-width:0;}
+  .rank-name{font-size:11px;font-weight:600;color:#e6edf3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rank-meta{font-size:9px;color:#484f58;margin-top:1px;}
+  .rank-val{font-size:14px;font-weight:700;color:#58a6ff;margin-left:8px;white-space:nowrap;}
+
+  /* Legend */
+  .leg{padding:8px 18px;border-top:1px solid #21262d;}
+  .leg-bar{height:8px;border-radius:4px;}
+  .leg-labels{display:flex;justify-content:space-between;font-size:8px;color:#484f58;margin-top:3px;}
+
+  /* ===== MAIN ===== */
+  #main{flex:1;display:flex;flex-direction:column;position:relative;}
+  #map{flex:1;}
+
+  /* ===== DETAIL PANEL ===== */
+  #detail{height:0;overflow:hidden;background:#0d1117;border-top:1px solid #21262d;transition:height .3s ease;display:flex;}
+  #detail.open{height:380px;}
+
+  /* Detail left */
+  #dl{width:380px;padding:16px 18px;overflow-y:auto;border-right:1px solid #161b22;}
+  #dl h2{font-size:18px;font-weight:700;color:#e6edf3;margin-bottom:2px;}
+  .d-identity{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .d-type-badge{font-size:10px;padding:3px 10px;border-radius:12px;background:#161b22;color:#8b949e;border:1px solid #21262d;font-weight:500;}
+  .d-tags{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:10px;}
+  .dtag{font-size:9px;padding:2px 8px;border-radius:10px;background:#0d2240;color:#58a6ff;border:1px solid #1f3d5e;font-weight:500;}
+
+  .narrative{font-size:10.5px;color:#8b949e;line-height:1.6;padding:10px 12px;background:#161b22;border-radius:8px;border-left:3px solid #58a6ff;margin-bottom:10px;}
+
+  .sec{font-size:9px;color:#484f58;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin:12px 0 5px;padding-top:6px;border-top:1px solid #161b22;}
+  .sec:first-of-type{border:none;margin-top:0;}
+
+  .mr{display:flex;justify-content:space-between;align-items:center;padding:3px 0;}
+  .mr-l{font-size:10px;color:#8b949e;}
+  .mr-v{font-size:11px;font-weight:600;}
+  .mr-v.up{color:#3fb950;} .mr-v.down{color:#f85149;} .mr-v.blue{color:#58a6ff;}
+  .mr-v.gold{color:#d29922;} .mr-v.muted{color:#8b949e;} .mr-v.purple{color:#a371f7;}
+  .mr-ctx{font-size:8px;color:#484f58;margin-left:4px;}
+
+  /* Signal cards */
+  .signal{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:#161b22;border-radius:8px;margin-bottom:4px;border-left:3px solid #30363d;}
+  .signal.high{border-color:#d29922;} .signal.medium{border-color:#58a6ff;}
+  .signal-icon{font-size:16px;flex-shrink:0;margin-top:1px;}
+  .signal-body{flex:1;}
+  .signal-label{font-size:10px;font-weight:600;color:#e6edf3;}
+  .signal-detail{font-size:9px;color:#8b949e;margin-top:1px;}
+  .signal-source{font-size:7px;color:#484f58;margin-top:2px;font-style:italic;}
+
+  /* Opportunity bars */
+  .opp-row{margin-bottom:5px;}
+  .opp-head{display:flex;justify-content:space-between;font-size:9px;margin-bottom:2px;}
+  .opp-name{color:#8b949e;font-weight:500;}
+  .opp-score{color:#58a6ff;font-weight:600;}
+  .opp-bg{height:6px;background:#161b22;border-radius:3px;}
+  .opp-fill{height:100%;border-radius:3px;transition:width .3s;}
+
+  /* Detail right */
+  #dr{flex:1;display:flex;flex-direction:column;padding:10px 14px;position:relative;}
+  #close-btn{position:absolute;top:6px;right:10px;background:none;border:none;color:#484f58;font-size:22px;cursor:pointer;z-index:10;line-height:1;}
+  #close-btn:hover{color:#f85149;}
+  .tabs{display:flex;gap:3px;margin-bottom:8px;}
+  .tab{padding:5px 14px;border-radius:6px;background:#161b22;color:#8b949e;font-size:10px;cursor:pointer;font-weight:500;border:1px solid transparent;transition:all .12s;}
+  .tab:hover{color:#c9d1d9;}
+  .tab.on{background:#0d2240;color:#58a6ff;border-color:#1f3d5e;font-weight:600;}
+  .chart-wrap{flex:1;position:relative;}
+
+  /* Tooltip */
+  .tt{background:rgba(13,17,23,0.97)!important;color:#c9d1d9!important;border:1px solid #30363d!important;font-size:11px!important;line-height:1.6!important;border-radius:8px!important;padding:10px 14px!important;box-shadow:0 8px 24px rgba(0,0,0,0.5)!important;max-width:300px!important;}
+
+  /* Scrollbar */
+  ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:#0d1117;} ::-webkit-scrollbar-thumb{background:#21262d;border-radius:3px;} ::-webkit-scrollbar-thumb:hover{background:#30363d;}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="s-head">
+    <h1>Milano <span>Quartieri</span></h1>
+    <p>Intelligenza urbana per 88 quartieri &middot; Prezzi, servizi, opportunità</p>
+  </div>
+
+  <div class="kpi-strip">
+    <div class="kpi"><div class="kpi-v" id="k-pop">-</div><div class="kpi-l">Residenti</div></div>
+    <div class="kpi"><div class="kpi-v" id="k-poi">-</div><div class="kpi-l">Attività</div></div>
+    <div class="kpi"><div class="kpi-v" id="k-price">-</div><div class="kpi-l">EUR/mq med.</div></div>
+    <div class="kpi"><div class="kpi-v" id="k-trend">-</div><div class="kpi-l">Trend 5a</div></div>
+  </div>
+
+  <div class="ctrl">
+    <div class="ctrl-label">Mappa tematica</div>
+    <div class="pills">
+      <span class="pill on" data-layer="value">Rapporto Q/P</span>
+      <span class="pill" data-layer="price">Prezzi</span>
+      <span class="pill" data-layer="price_trend">Trend prezzi</span>
+      <span class="pill" data-layer="iai">Investimenti</span>
+      <span class="pill" data-layer="quality">Qualità vita</span>
+      <span class="pill" data-layer="services">Servizi</span>
+      <span class="pill" data-layer="education">Laureati</span>
+      <span class="pill" data-layer="foreign">Stranieri</span>
+    </div>
+  </div>
+
+  <div class="leg" id="legend"></div>
+
+  <div class="rank-controls">
+    <span class="rank-title">Classifica</span>
+    <select id="rank-metric">
+      <option value="value_score">Rapporto qualità-prezzo</option>
+      <option value="iai_score">Attrattività investimento</option>
+      <option value="price_sqm">Prezzo EUR/mq</option>
+      <option value="quality_score">Qualità della vita</option>
+      <option value="price_change_5y">Trend prezzi 5 anni</option>
+      <option value="poi_density">Servizi per abitante</option>
+      <option value="poi_entropy">Diversità commerciale</option>
+      <option value="residents_per_poi">Meno serviti</option>
+      <option value="pct_tertiary">Piu istruiti</option>
+      <option value="pct_foreign">Piu multiculturali</option>
+    </select>
+  </div>
+
+  <div class="rank-list" id="rank-list"></div>
+</div>
+
+<div id="main">
+  <div id="map"></div>
+  <div id="detail">
+    <div id="dl"></div>
+    <div id="dr">
+      <button id="close-btn">&times;</button>
+      <div class="tabs">
+        <div class="tab on" data-t="radar">Profilo</div>
+        <div class="tab" data-t="prices">Prezzi storici</div>
+        <div class="tab" data-t="categories">Mix commerciale</div>
+        <div class="tab" data-t="opportunities">Opportunità</div>
+      </div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== STATE ==========
+let QQ=[], layer='value', chartTab='radar', chart=null, selNil=null, lastGJ=null, lastDetail=null, rankings={};
+
+// ========== MAP ==========
+const M = L.map('map',{zoomControl:true}).setView([45.464,9.19],12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'CartoDB',maxZoom:18}).addTo(M);
+let geoL = null;
+
+function lerp(a,b,t){return a+(b-a)*Math.max(0,Math.min(1,t));}
+function rgb(r,g,b){return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;}
+const EMPTY='#0d1117';
+
+// ---- Color functions per layer ----
+function colValue(p) {
+  const v=p.value_score; if(v==null) return EMPTY;
+  const t=v/100;
+  if(t<.25) return rgb(lerp(25,40,t/.25),lerp(18,35,t/.25),lerp(22,30,t/.25));
+  if(t<.45) return rgb(lerp(40,55,(t-.25)/.2),lerp(35,100,(t-.25)/.2),lerp(30,75,(t-.25)/.2));
+  if(t<.65) return rgb(lerp(55,60,(t-.45)/.2),lerp(100,170,(t-.45)/.2),lerp(75,120,(t-.45)/.2));
+  return rgb(lerp(60,100,(t-.65)/.35),lerp(170,240,(t-.65)/.35),lerp(120,180,(t-.65)/.35));
+}
+function colPrice(p) {
+  const v=p.price_sqm; if(!v) return EMPTY;
+  if(v<2500) return rgb(30,25,18);
+  if(v<4000){const t=(v-2500)/1500; return rgb(lerp(30,100,t),lerp(25,50,t),lerp(18,20,t));}
+  if(v<6000){const t=(v-4000)/2000; return rgb(lerp(100,200,t),lerp(50,110,t),lerp(20,25,t));}
+  if(v<8000){const t=(v-6000)/2000; return rgb(lerp(200,240,t),lerp(110,170,t),lerp(25,50,t));}
+  return rgb(255,210,80);
+}
+function colPriceTrend(p) {
+  const v=p.price_change_5y; if(v==null) return EMPTY;
+  if(v<.15){const t=Math.max(0,v/.15); return rgb(lerp(40,50,t),lerp(20,30,t),lerp(25,35,t));}
+  if(v<.30){const t=(v-.15)/.15; return rgb(lerp(50,50,t),lerp(30,100,t),lerp(35,60,t));}
+  if(v<.50){const t=(v-.30)/.20; return rgb(lerp(50,60,t),lerp(100,180,t),lerp(60,100,t));}
+  const t=Math.min(1,(v-.50)/.30); return rgb(lerp(60,110,t),lerp(180,240,t),lerp(100,160,t));
+}
+function colIAI(p) {
+  const v=p.iai_score; if(v==null) return EMPTY;
+  const t=v/100;
+  if(t<.25) return rgb(lerp(25,35,t/.25),lerp(18,22,t/.25),lerp(30,45,t/.25));
+  if(t<.45) return rgb(lerp(35,90,(t-.25)/.2),lerp(22,40,(t-.25)/.2),lerp(45,120,(t-.25)/.2));
+  if(t<.65) return rgb(lerp(90,160,(t-.45)/.2),lerp(40,70,(t-.45)/.2),lerp(120,200,(t-.45)/.2));
+  return rgb(lerp(160,210,(t-.65)/.35),lerp(70,110,(t-.65)/.35),lerp(200,250,(t-.65)/.35));
+}
+function colQuality(p) {
+  const v=p.quality_score; if(v==null) return EMPTY;
+  const t=v/100;
+  if(t<.25) return rgb(lerp(20,30,t/.25),lerp(25,40,t/.25),lerp(25,35,t/.25));
+  if(t<.45) return rgb(lerp(30,40,(t-.25)/.2),lerp(40,110,(t-.25)/.2),lerp(35,80,(t-.25)/.2));
+  if(t<.65) return rgb(lerp(40,55,(t-.45)/.2),lerp(110,180,(t-.45)/.2),lerp(80,140,(t-.45)/.2));
+  return rgb(lerp(55,100,(t-.65)/.35),lerp(180,240,(t-.65)/.35),lerp(140,210,(t-.65)/.35));
+}
+function colServices(p) {
+  const v=p.poi_density; if(!v) return EMPTY;
+  if(v<5) return rgb(20,25,35);
+  if(v<15){const t=(v-5)/10; return rgb(lerp(20,45,t),lerp(25,70,t),lerp(35,130,t));}
+  if(v<30){const t=(v-15)/15; return rgb(lerp(45,75,t),lerp(70,145,t),lerp(130,215,t));}
+  const t=Math.min(1,(v-30)/30); return rgb(lerp(75,130,t),lerp(145,210,t),lerp(215,255,t));
+}
+function colEducation(p) {
+  const v=p.pct_tertiary; if(v==null) return EMPTY;
+  if(v<.15) return rgb(22,18,30);
+  if(v<.25){const t=(v-.15)/.10; return rgb(lerp(22,65,t),lerp(18,28,t),lerp(30,100,t));}
+  if(v<.35){const t=(v-.25)/.10; return rgb(lerp(65,140,t),lerp(28,55,t),lerp(100,190,t));}
+  const t=Math.min(1,(v-.35)/.15); return rgb(lerp(140,200,t),lerp(55,100,t),lerp(190,245,t));
+}
+function colForeign(p) {
+  const v=p.pct_foreign; if(v==null) return EMPTY;
+  if(v<.10) return rgb(18,20,30);
+  if(v<.20){const t=(v-.10)/.10; return rgb(lerp(18,40,t),lerp(20,60,t),lerp(30,120,t));}
+  if(v<.30){const t=(v-.20)/.10; return rgb(lerp(40,70,t),lerp(60,120,t),lerp(120,200,t));}
+  const t=Math.min(1,(v-.30)/.15); return rgb(lerp(70,110,t),lerp(120,180,t),lerp(200,250,t));
+}
+
+function getCol(p) {
+  switch(layer){
+    case 'value': return colValue(p);
+    case 'price': return colPrice(p);
+    case 'price_trend': return colPriceTrend(p);
+    case 'iai': return colIAI(p);
+    case 'quality': return colQuality(p);
+    case 'services': return colServices(p);
+    case 'education': return colEducation(p);
+    case 'foreign': return colForeign(p);
+  } return EMPTY;
+}
+
+function nilStyle(f) {
+  const p=f.properties, sel=p.nil_id===selNil;
+  return {fillColor:getCol(p),fillOpacity:.78,color:sel?'#58a6ff':'#30363d',weight:sel?2.5:0.8,opacity:sel?1:.4};
+}
+
+// ========== LEGEND ==========
+function updateLeg() {
+  const el=document.getElementById('legend');
+  const L={
+    value:['#141a14','#324c3c','#329664','#50dca8','basso','','','alto valore'],
+    price:['#0e1418','#3c1e12','#b46414','#fac850','2.5k','4k','6k','8k+ EUR/mq'],
+    price_trend:['#141019','#1e1928','#28503c','#64e696','<20%','35%','50%','>70%'],
+    iai:['#0f0c14','#501e64','#963cb4','#c864f0','basso','','','alto potenziale'],
+    quality:['#0f0f14','#1e5a46','#32aa82','#5ae6c8','bassa','','','alta qualità'],
+    services:['#0e1218','#28406e','#4682c8','#78c8ff','0','15','30','60+ per 1k ab.'],
+    education:['#0f0c14','#321450','#7828aa','#be5af0','<15%','25%','35%','>50%'],
+    foreign:['#0d0f16','#1e3264','#3c64b4','#64aaf0','<10%','20%','30%','>45%'],
+  };
+  const c=L[layer]||L.value;
+  el.innerHTML=`<div class="leg-bar" style="background:linear-gradient(to right,${c[0]},${c[1]},${c[2]},${c[3]})"></div>
+    <div class="leg-labels"><span>${c[4]}</span><span>${c[5]}</span><span>${c[6]}</span><span>${c[7]}</span></div>`;
+}
+
+// ========== RANKING LIST ==========
+function updateRankList() {
+  const metric = document.getElementById('rank-metric').value;
+  const el = document.getElementById('rank-list');
+  const rk = rankings[metric];
+  if(!rk||!rk.top){el.innerHTML='<div style="padding:20px;color:#484f58;font-size:11px;">Nessun dato</div>';return;}
+
+  el.innerHTML = rk.top.map((r,i) => {
+    let val = r.value;
+    if(metric==='price_sqm') val=val.toLocaleString()+' €';
+    else if(metric==='price_change_5y') val='+'+(val*100).toFixed(0)+'%';
+    else if(metric==='poi_density') val=val.toFixed(1);
+    else if(metric==='poi_entropy'||metric==='pct_tertiary'||metric==='pct_foreign') val=(val*100).toFixed(0)+'%';
+    else if(metric==='residents_per_poi') val=Math.round(val);
+    else if(metric==='value_score'||metric==='quality_score'||metric==='iai_score') val=Math.round(val)+'/100';
+    else val=Math.round(val).toLocaleString();
+
+    const meta = r.type ? `${r.emoji} ${r.type}` : '';
+    return `<div class="rank-item${selNil===r.nil_id?' selected':''}" onclick="clickRank(${r.nil_id})">
+      <span class="rank-pos${i<3?' top3':''}">${i+1}</span>
+      <div class="rank-body"><div class="rank-name">${r.name}</div><div class="rank-meta">${meta}</div></div>
+      <span class="rank-val">${val}</span>
+    </div>`;
+  }).join('');
+}
+
+function clickRank(nilId){selNil=nilId;loadDetail(nilId);restyle();updateRankList();zoomToNil(nilId);}
+function zoomToNil(nilId){if(!lastGJ)return;const f=lastGJ.features.find(x=>x.properties.nil_id===nilId);if(f){const ly=L.geoJSON(f);M.fitBounds(ly.getBounds().pad(0.15));}}
+
+// ========== DATA ==========
+async function loadQQ(){const r=await fetch('/api/quarters');QQ=await r.json();}
+
+async function loadOverview(){
+  const r=await fetch('/api/overview');const d=await r.json();
+  document.getElementById('k-pop').textContent=d.total_pop?Math.round(d.total_pop/1000)+'k':'-';
+  document.getElementById('k-poi').textContent=(d.total_poi||0).toLocaleString();
+  document.getElementById('k-price').textContent=d.median_price_sqm?(d.median_price_sqm).toLocaleString()+'€':'-';
+  document.getElementById('k-trend').textContent=d.avg_price_change_5y?'+'+(d.avg_price_change_5y*100).toFixed(0)+'%':'-';
+}
+
+async function loadRankings(){const r=await fetch('/api/rankings');rankings=await r.json();updateRankList();}
+
+async function loadMap(){
+  const yq=QQ[QQ.length-1]; // always latest
+  const r=await fetch(`/api/map-data?year_quarter=${yq}&layer=${layer}`);
+  const d=await r.json();lastGJ=d;
+  if(geoL) M.removeLayer(geoL);
+
+  geoL = L.geoJSON(d, {
+    style: nilStyle,
+    onEachFeature: (f, ly) => {
+      const p=f.properties;
+      ly.on('mouseover',()=>{ly.setStyle({weight:2.5,color:'#58a6ff',fillOpacity:.9});ly.bringToFront();});
+      ly.on('mouseout',()=>{if(p.nil_id!==selNil) ly.setStyle(nilStyle(f));});
+      ly.on('click',()=>{selNil=p.nil_id;loadDetail(p.nil_id);restyle();updateRankList();});
+
+      // Rich tooltip
+      let t=`<b>${p.emoji||''} ${p.name}</b>`;
+      if(p.type) t+=`<br><span style="color:#58a6ff">${p.type}</span>`;
+
+      // Always show key stats
+      if(p.price_sqm) t+=`<br>💰 <b>${p.price_sqm.toLocaleString()} €/mq</b>`;
+      if(p.price_change_5y!=null) t+=` <span style="color:${p.price_change_5y>.3?'#3fb950':'#8b949e'}">(+${(p.price_change_5y*100).toFixed(0)}% 5a)</span>`;
+      if(p.pop) t+=`<br>👥 ${Math.round(p.pop).toLocaleString()} residenti`;
+      if(p.poi_count) t+=` · ${Math.round(p.poi_count)} attività`;
+
+      // Layer-specific highlight
+      if(layer==='value'&&p.value_score!=null) t+=`<br>⭐ Rapporto Q/P: <b>${Math.round(p.value_score)}/100</b>`;
+      if(layer==='iai'&&p.iai_score!=null) t+=`<br>📊 Attrattività investimento: <b>${Math.round(p.iai_score)}/100</b>`;
+      if(layer==='quality'&&p.quality_score!=null) t+=`<br>🏆 Qualità vita: <b>${Math.round(p.quality_score)}/100</b>`;
+      if(layer==='services'&&p.poi_density!=null) t+=`<br>🏪 ${p.poi_density.toFixed(1)} attività per 1000 ab.`;
+      if(layer==='education'&&p.pct_tertiary!=null) t+=`<br>🎓 ${(p.pct_tertiary*100).toFixed(0)}% laureati`;
+      if(layer==='foreign'&&p.pct_foreign!=null) t+=`<br>🌍 ${(p.pct_foreign*100).toFixed(0)}% stranieri`;
+
+      if(p.tags&&p.tags.length) t+=`<br><span style="color:#484f58;font-size:9px">${p.tags.slice(0,3).join(' · ')}</span>`;
+      if(!p.significant) t+=`<br><span style="color:#484f58;font-size:8px">⚠ Dati limitati (<30 attività)</span>`;
+
+      ly.bindTooltip(t,{sticky:true,className:'tt'});
+    }
+  }).addTo(M);
+}
+
+function restyle(){if(geoL&&lastGJ) geoL.eachLayer(ly=>ly.setStyle(nilStyle(ly.feature)));}
+
+// ========== DETAIL ==========
+async function loadDetail(nilId){
+  const r=await fetch(`/api/nil/${nilId}`);lastDetail=await r.json();
+  document.getElementById('detail').classList.add('open');
+  renderLeft();renderChart(chartTab);
+}
+
+function renderLeft(){
+  const d=lastDetail, s=d.summary||{}, id=d.identity||{}, st=d.strategic||{};
+  let h='';
+
+  // Header
+  h+=`<h2>${id.emoji||''} ${d.name}</h2>`;
+  h+=`<div class="d-identity"><span class="d-type-badge">${id.primary||''}</span></div>`;
+  if(id.tags&&id.tags.length) h+=`<div class="d-tags">${id.tags.map(t=>`<span class="dtag">${t}</span>`).join('')}</div>`;
+
+  // Narrative
+  if(d.narrative) h+=`<div class="narrative">${d.narrative}</div>`;
+
+  // --- Prices & Value ---
+  h+=`<div class="sec">Prezzi e valore</div>`;
+  if(s.price_sqm) h+=mr('Prezzo medio',s.price_sqm.toLocaleString()+' €/mq','gold');
+  if(s.price_min&&s.price_max) h+=mr('Range',s.price_min.toLocaleString()+' - '+s.price_max.toLocaleString()+' €/mq','muted');
+  if(s.price_change_5y!=null) h+=mr('Trend 5 anni','+'+(s.price_change_5y*100).toFixed(0)+'%',s.price_change_5y>.35?'up':'muted');
+  if(s.price_change_10y!=null) h+=mr('Trend 10 anni','+'+(s.price_change_10y*100).toFixed(0)+'%',s.price_change_10y>.50?'up':'muted');
+  if(s.quality_score!=null) h+=mr('Qualità vita',Math.round(s.quality_score)+'/100','blue');
+  if(s.value_score!=null) h+=mr('Rapporto Q/P',Math.round(s.value_score)+'/100',s.value_score>60?'up':s.value_score<40?'down':'muted');
+
+  // --- Demographics ---
+  h+=`<div class="sec">Chi vive qui</div>`;
+  if(s.pop) h+=mr('Residenti',s.pop.toLocaleString(),'blue');
+  if(s.pct_tertiary!=null) h+=mr('Laureati',(s.pct_tertiary*100).toFixed(0)+'%',s.pct_tertiary>.35?'purple':'muted');
+  if(s.pct_foreign!=null) h+=mr('Stranieri',(s.pct_foreign*100).toFixed(0)+'%','muted');
+  if(s.aging_index!=null) h+=mr('Indice invecchiamento',s.aging_index.toFixed(1),s.aging_index>2.5?'down':'muted');
+
+  // --- Signals ---
+  if(d.signals&&d.signals.length){
+    h+=`<div class="sec">Segnali di trasformazione</div>`;
+    d.signals.forEach(sig=>{
+      h+=`<div class="signal ${sig.severity}">
+        <span class="signal-icon">${sig.icon}</span>
+        <div class="signal-body">
+          <div class="signal-label">${sig.label}</div>
+          <div class="signal-detail">${sig.detail}</div>
+          <div class="signal-source">${sig.source||''}</div>
+        </div>
+      </div>`;
+    });
+  }
+
+  // --- Strategic ---
+  if(st.iai_score!=null){
+    h+=`<div class="sec">Intelligenza strategica</div>`;
+    h+=mr('Attrattività investimento',Math.round(st.iai_score)+'/100',st.iai_score>60?'up':st.iai_score<30?'down':'muted');
+    if(st.catchment_effective) h+=mr('Bacino utenza effettivo',st.catchment_effective.toLocaleString(),'blue');
+    if(st.catchment_multiplier) h+=mr('Moltiplicatore attrattività','x'+st.catchment_multiplier.toFixed(2),'muted');
+  }
+
+  // Top commercial opportunity
+  if(st.opportunities&&st.opportunities.length){
+    const top = st.opportunities[0];
+    if(top.score > 50){
+      h+=`<div class="sec">Miglior opportunità commerciale</div>`;
+      h+=`<div class="signal medium">
+        <span class="signal-icon">🎯</span>
+        <div class="signal-body">
+          <div class="signal-label">${top.name}</div>
+          <div class="signal-detail">Score ${Math.round(top.score)}/100 · Attuale: ${(top.current_share*100).toFixed(0)}% vs ${(top.city_median*100).toFixed(0)}% media città</div>
+        </div>
+      </div>`;
+    }
+  }
+
+  // --- Comparables ---
+  if(d.comparables&&d.comparables.length){
+    h+=`<div class="sec">Quartieri simili</div>`;
+    d.comparables.forEach(c=>{
+      h+=`<div class="mr" style="cursor:pointer" onclick="clickRank(${c.nil_id})">
+        <span class="mr-l">${c.name}</span>
+        <span class="mr-v muted">${c.price_sqm?c.price_sqm.toLocaleString()+'€':'?'} · ${c.poi_count} att.</span>
+      </div>`;
+    });
+  }
+
+  document.getElementById('dl').innerHTML=h;
+}
+
+function mr(label,val,cls){
+  return `<div class="mr"><span class="mr-l">${label}</span><span class="mr-v ${cls||''}">${val}</span></div>`;
+}
+
+// ========== CHARTS ==========
+function renderChart(tab){
+  if(!lastDetail) return;
+  chartTab=tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.t===tab));
+  if(chart) chart.destroy();
+  chart=null;
+  const ctx=document.getElementById('chart').getContext('2d');
+
+  if(tab==='radar'){
+    // Radar chart: percentile profile
+    const rd=lastDetail.radar||{};
+    const labels=Object.keys(rd);
+    const vals=Object.values(rd);
+    if(!labels.length) return;
+
+    chart=new Chart(ctx,{
+      type:'radar',
+      data:{
+        labels,
+        datasets:[{
+          label:lastDetail.name,
+          data:vals,
+          backgroundColor:'rgba(88,166,255,0.15)',
+          borderColor:'#58a6ff',
+          borderWidth:2,
+          pointBackgroundColor:'#58a6ff',
+          pointRadius:4,
+          pointHoverRadius:6,
+        },{
+          label:'Media città',
+          data:labels.map(()=>50),
+          backgroundColor:'rgba(139,148,158,0.05)',
+          borderColor:'#30363d',
+          borderWidth:1,
+          borderDash:[4,4],
+          pointRadius:0,
+        }]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        scales:{r:{
+          beginAtZero:true,max:100,
+          ticks:{display:false,stepSize:25},
+          grid:{color:'#21262d'},
+          angleLines:{color:'#21262d'},
+          pointLabels:{color:'#c9d1d9',font:{size:10,weight:'500'}},
+        }},
+        plugins:{
+          legend:{labels:{color:'#8b949e',font:{size:9},usePointStyle:true,boxWidth:6}},
+          title:{display:true,text:'Profilo rispetto alla città (percentile)',color:'#484f58',font:{size:10}},
+        }
+      }
+    });
+  }
+
+  else if(tab==='prices'){
+    // Price history (OMI — reliable!)
+    const ph=lastDetail.price_history;
+    if(!ph||!ph.semesters) return;
+
+    chart=new Chart(ctx,{
+      type:'line',
+      data:{
+        labels:ph.semesters,
+        datasets:[{
+          label:'Prezzo medio €/mq',
+          data:ph.prices,
+          borderColor:'#d29922',
+          backgroundColor:'rgba(210,153,34,0.1)',
+          borderWidth:2.5,
+          pointRadius:2,
+          pointHoverRadius:5,
+          tension:.3,
+          fill:true,
+        }]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{
+          legend:{display:false},
+          title:{display:true,text:'Andamento prezzi residenziali (fonte: OMI Agenzia delle Entrate)',color:'#484f58',font:{size:10}},
+        },
+        scales:{
+          x:{ticks:{color:'#484f58',maxTicksLimit:8,font:{size:8}},grid:{color:'#161b22'}},
+          y:{ticks:{color:'#d29922',font:{size:9},callback:v=>v.toLocaleString()+'€'},grid:{color:'#161b22'}},
+        }
+      }
+    });
+  }
+
+  else if(tab==='categories'){
+    // Horizontal bar: category shares vs city median
+    const cats=lastDetail.categories||[];
+    if(!cats.length) return;
+    const top8=cats.slice(0,8);
+    const labels=top8.map(c=>c.name);
+    const vals=top8.map(c=>+(c.value*100).toFixed(1));
+    const medians=top8.map(c=>+(c.city_median*100).toFixed(1));
+
+    chart=new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels,
+        datasets:[
+          {label:'Quartiere',data:vals,backgroundColor:'#58a6ff',borderRadius:3,barPercentage:.7},
+          {label:'Media città',data:medians,backgroundColor:'#30363d',borderRadius:3,barPercentage:.7},
+        ]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,indexAxis:'y',
+        plugins:{
+          legend:{labels:{color:'#8b949e',font:{size:9},usePointStyle:true,boxWidth:6}},
+          title:{display:true,text:'Mix commerciale vs media città (%)',color:'#484f58',font:{size:10}},
+        },
+        scales:{
+          x:{ticks:{color:'#8b949e',font:{size:9},callback:v=>v+'%'},grid:{color:'#161b22'}},
+          y:{ticks:{color:'#c9d1d9',font:{size:9}},grid:{display:false}},
+        }
+      }
+    });
+  }
+
+  else if(tab==='opportunities'){
+    // Horizontal bar: commercial opportunity scores
+    const opps=(lastDetail.strategic||{}).opportunities||[];
+    if(!opps.length) return;
+
+    const labels=opps.map(o=>o.name);
+    const scores=opps.map(o=>o.score);
+    const colors=scores.map(s=>s>70?'#3fb950':s>50?'#58a6ff':s>30?'#d29922':'#484f58');
+
+    chart=new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels,
+        datasets:[{
+          label:'Opportunity Score',
+          data:scores,
+          backgroundColor:colors,
+          borderRadius:4,
+          barPercentage:.6,
+        }]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,indexAxis:'y',
+        plugins:{
+          legend:{display:false},
+          title:{display:true,text:'Opportunità commerciali — Dove aprire cosa (score domanda vs offerta)',color:'#484f58',font:{size:10}},
+          tooltip:{callbacks:{label:ctx=>`Score: ${ctx.raw}/100`}},
+        },
+        scales:{
+          x:{min:0,max:100,ticks:{color:'#8b949e',font:{size:9}},grid:{color:'#161b22'}},
+          y:{ticks:{color:'#c9d1d9',font:{size:9}},grid:{display:false}},
+        }
+      }
+    });
+  }
+}
+
+// ========== EVENTS ==========
+document.querySelectorAll('.pill').forEach(p=>{
+  p.addEventListener('click',()=>{
+    document.querySelectorAll('.pill').forEach(x=>x.classList.remove('on'));
+    p.classList.add('on');layer=p.dataset.layer;updateLeg();restyle();
+  });
+});
+
+document.getElementById('rank-metric').addEventListener('change',updateRankList);
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>renderChart(t.dataset.t)));
+document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');selNil=null;restyle();updateRankList();});
+
+// ========== INIT ==========
+(async()=>{await loadQQ();await loadOverview();await loadRankings();updateLeg();loadMap();})();
+</script>
+</body>
+</html>
