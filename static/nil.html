@@ -128,24 +128,28 @@
   /* Scrollbar */
   ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:#0d1117;} ::-webkit-scrollbar-thumb{background:#21262d;border-radius:3px;} ::-webkit-scrollbar-thumb:hover{background:#30363d;}
 
-  /* Mobile toggle button */
-  .mob-toggle{display:none;padding:8px 14px;border-top:1px solid #161b22;text-align:center;cursor:pointer;font-size:11px;color:#58a6ff;font-weight:600;background:#0d1117;user-select:none;}
-  .mob-toggle:active{background:#161b22;}
+  /* Mobile-only elements (hidden on desktop) */
+  .mob-toggle{display:none;}
+  .mob-sidebar-toggle{display:none;}
 
   /* ===== MOBILE RESPONSIVE ===== */
   @media (max-width: 768px) {
     body{flex-direction:column;overflow:hidden;}
 
-    /* Sidebar → compact top bar */
-    #sidebar{width:100%;min-width:100%;border-right:none;border-bottom:1px solid #21262d;overflow-y:auto;max-height:55vh;transition:max-height .3s ease;}
-    #sidebar.collapsed{max-height:none;overflow:visible;}
+    /* Sidebar: collapsed by default — only header bar visible */
+    #sidebar{width:100%;min-width:100%;border-right:none;border-bottom:1px solid #21262d;overflow:hidden;max-height:44px;transition:max-height .3s ease;}
+    #sidebar.mob-open{max-height:85vh;overflow-y:auto;}
 
-    .s-head{padding:10px 14px 6px;}
-    .s-head h1{font-size:16px;}
-    .s-head p{font-size:9px;margin-top:1px;}
+    /* Header becomes a single clickable row */
+    .s-head{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;}
+    .s-head h1{font-size:15px;}
+    .s-head p{display:none;}
+    .mob-sidebar-toggle{display:block;font-size:20px;color:#58a6ff;flex-shrink:0;margin-left:10px;line-height:1;}
 
+    /* Everything below header: compact when open */
+    .kpi-strip{border-bottom:1px solid #161b22;}
     .kpi{padding:8px 4px;}
-    .kpi-v{font-size:14px;}
+    .kpi-v{font-size:13px;}
     .kpi-l{font-size:7px;}
 
     .ctrl{padding:6px 14px;}
@@ -154,11 +158,11 @@
 
     .leg{padding:6px 14px;}
 
-    /* Ranking hidden by default on mobile */
+    /* Ranking: hidden until toggled within open sidebar */
     .rank-controls,.rank-list{display:none;}
     #sidebar.show-rank .rank-controls{display:flex;}
-    #sidebar.show-rank .rank-list{display:block;max-height:40vh;overflow-y:auto;}
-    .mob-toggle{display:block;}
+    #sidebar.show-rank .rank-list{display:block;max-height:35vh;overflow-y:auto;}
+    .mob-toggle{display:block;padding:8px 14px;text-align:center;cursor:pointer;font-size:11px;color:#58a6ff;font-weight:600;background:#0d1117;user-select:none;border-top:1px solid #161b22;}
 
     /* Main map fills remaining space */
     #main{flex:1;min-height:0;}
@@ -180,20 +184,20 @@
     /* Tooltip: narrower on mobile */
     .tt{max-width:220px!important;font-size:10px!important;padding:8px 10px!important;}
 
-    /* Leaflet controls: move zoom to not overlap sidebar */
-    .leaflet-top.leaflet-left{top:8px;left:8px;}
-
-    /* Overlay when detail open */
+    /* Overlay when detail or sidebar open */
     #mob-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:999;}
     #mob-overlay.show{display:block;}
+    /* Sidebar must be above overlay */
+    #sidebar{position:relative;z-index:1001;}
   }
 
   /* Small phones */
   @media (max-width: 420px) {
     .kpi-strip{grid-template-columns:repeat(2,1fr);}
     .kpi{padding:6px 4px;}
-    .kpi-v{font-size:13px;}
+    .kpi-v{font-size:12px;}
     .s-head h1{font-size:14px;}
+    #sidebar{max-height:40px;}
     .pill{font-size:8px;padding:3px 7px;}
     #detail.open{height:85vh;}
     #dl h2{font-size:14px;}
@@ -203,9 +207,12 @@
 <body>
 
 <div id="sidebar">
-  <div class="s-head">
-    <h1>Milano <span>Quartieri</span></h1>
-    <p>Intelligenza urbana per 88 quartieri &middot; Prezzi, servizi, opportunità</p>
+  <div class="s-head" id="mob-head">
+    <div>
+      <h1>Milano <span>Quartieri</span></h1>
+      <p>Intelligenza urbana per 88 quartieri &middot; Prezzi, servizi, opportunità</p>
+    </div>
+    <span class="mob-sidebar-toggle" id="mob-sidebar-btn">☰</span>
   </div>
 
   <div class="kpi-strip">
@@ -739,15 +746,29 @@ document.getElementById('rank-metric').addEventListener('change',updateRankList)
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>renderChart(t.dataset.t)));
 document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');document.getElementById('mob-overlay').classList.remove('show');selNil=null;restyle();updateRankList();});
 
-// Mobile: ranking toggle
+// Mobile: sidebar expand/collapse
+document.getElementById('mob-head').addEventListener('click',function(e){
+  if(window.innerWidth>768) return;
+  const sb=document.getElementById('sidebar');
+  const opening=!sb.classList.contains('mob-open');
+  sb.classList.toggle('mob-open');
+  document.getElementById('mob-sidebar-btn').textContent=opening?'✕':'☰';
+  document.getElementById('mob-overlay').classList.toggle('show',opening);
+});
+
+// Mobile: ranking toggle (inside expanded sidebar)
 document.getElementById('mob-rank-toggle').addEventListener('click',function(){
   const sb=document.getElementById('sidebar');
   const show=sb.classList.toggle('show-rank');
   this.textContent=show?'✕ Chiudi classifica':'📊 Mostra classifica';
 });
 
-// Mobile: overlay closes detail
+// Mobile: overlay closes sidebar and detail
 document.getElementById('mob-overlay').addEventListener('click',()=>{
+  const sb=document.getElementById('sidebar');
+  sb.classList.remove('mob-open','show-rank');
+  document.getElementById('mob-sidebar-btn').textContent='☰';
+  document.getElementById('mob-rank-toggle').textContent='📊 Mostra classifica';
   document.getElementById('detail').classList.remove('open');
   document.getElementById('mob-overlay').classList.remove('show');
   selNil=null;restyle();updateRankList();
