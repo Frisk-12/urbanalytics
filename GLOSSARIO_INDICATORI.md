@@ -159,25 +159,126 @@ Basati sull'ultima snapshot disponibile dei POI (Points of Interest) da OpenStre
 - **Calcolo**: `(NIR - RED) / (NIR + RED)` da bande Sentinel-2, media dei pixel nel NIL
 - **Range**: -1 → 1 (valori > 0.3 indicano vegetazione significativa)
 - **Fonte**: Sentinel-2 via Google Earth Engine
+- **Nota**: nel quality_score viene applicato un cap a 0.30 per rendimenti decrescenti
+
+### Indice di costruito (builtup_mean)
+- **Definizione**: frazione media di superficie costruita nel NIL
+- **Calcolo**: media dei pixel di indice di costruito (built-up index) entro il perimetro del NIL
+- **Range**: 0 → 1 (0 = nessun costruito, 1 = completamente edificato)
+- **Fonte**: dataset derivato Sentinel-2 via Google Earth Engine
+- **Nota**: nel quality_score viene applicato un floor a 0.15 per attenuare la penalità nei quartieri con costruito moderato
+- **Fallback**: se il trimestre più recente non ha dati satellitari, il sistema cerca automaticamente il trimestre precedente più recente disponibile (stessa logica per NDVI)
+
+---
+
+## 4b. Indicatori infrastrutturali (Comune di Milano)
+
+Dati open data del Comune di Milano, aggregati a livello NIL tramite spatial join (punti dentro poligoni) o ID_NIL diretto dove disponibile.
+
+**Fonte**: Portale Open Data del Comune di Milano
+**Copertura**: dataset statici (ultimo aggiornamento disponibile)
+
+### Fermate TPL (tpl_stops)
+- **Definizione**: numero di fermate del trasporto pubblico locale (autobus e tram) nel NIL
+- **Calcolo**: point-in-polygon delle 4.690 fermate nei confini NIL
+- **Fonte**: Comune di Milano — dataset `tpl_fermate_shp`
+
+### Linee TPL (tpl_lines)
+- **Definizione**: numero di linee distinte di autobus/tram che servono il NIL
+- **Calcolo**: conteggio delle linee uniche associate alle fermate nel NIL
+- **Interpretazione**: misura la **connettività** (quante direzioni diverse puoi raggiungere), non la capillarità
+
+### Fermate Metro (metro_stops)
+- **Definizione**: numero di stazioni della metropolitana nel NIL
+- **Calcolo**: point-in-polygon delle 130 fermate metro nei confini NIL
+- **Fonte**: Comune di Milano — dataset `tpl_metrofermate_shp`
+
+### Linee Metro (metro_lines)
+- **Definizione**: numero di linee metro distinte che servono il NIL (0-4)
+- **Interpretazione**: avere 2+ linee metro = snodo di interscambio
+
+### Connettività trasporto (connectivity)
+- **Definizione**: indice composito di accessibilità al trasporto pubblico
+- **Calcolo**: `metro_lines × 5 + tpl_lines`
+- **Interpretazione**: il peso 5× per le linee metro riflette l'impatto maggiore del servizio metropolitano rispetto al bus. Duomo (42) è il NIL più connesso, seguito da Buenos Aires (38) e Magenta/Brera (32)
+- **Nota**: usato nel quality_score al posto del transit_per_1000 (per-capita), che distorceva a favore dei quartieri poco popolati
+
+### Impianti sportivi (sport_facilities)
+- **Definizione**: numero di impianti sportivi pubblici e privati nel NIL
+- **Calcolo**: aggregazione per ID_NIL (campo già presente nel dataset originale)
+- **Fonte**: Comune di Milano — dataset `ds34_impianti_sportivi`
+- **Copertura**: 1.041 impianti mappati su 73 NIL
+- **Nota**: nel quality_score si usa `log(1 + count)` per attenuare gli outlier
+
+### Parchi (park_area_mq, park_count)
+- **Definizione**: superficie totale e conteggio dei parchi e giardini pubblici nel NIL
+- **Calcolo**: assegnazione per centroide del poligono parco, somma delle aree in mq
+- **Fonte**: Comune di Milano — dataset `parchi`
+- **Copertura**: 1.065 aree verdi per un totale di 7.7 km², mappate su 53 NIL
+- **Nota**: nel quality_score si usa `park_area_mq / pop_tot` con cap a 10 mq/ab per rendimenti decrescenti. Complementare all'NDVI: i parchi sono infrastrutture puntuali, l'NDVI misura il verde diffuso
+
+### Biblioteche e archivi (libraries)
+- **Definizione**: numero di biblioteche, archivi e strutture culturali pubbliche nel NIL
+- **Calcolo**: point-in-polygon delle 232 strutture nei confini NIL
+- **Fonte**: Comune di Milano — dataset `ds41_bibliotechearchivi2007_00_00`
+- **Copertura**: 232 strutture mappate su 54 NIL
+- **Nota**: non incluso nel quality_score (distribuzione troppo disomogenea, include archivi speciali non legati alla qualità di quartiere)
 
 ---
 
 ## 5. Indici compositi
 
-### Qualità della vita (quality_score)
-- **Definizione**: indice composito che misura la qualità complessiva della vita nel quartiere
-- **Scala**: 0-100 (rango percentile tra gli 88 NIL)
-- **Componenti positive** (somma pesata dei ranghi percentile):
-  - Entropia commerciale: peso 20%
-  - Densità commerciale: peso 20%
-  - NDVI (verde): peso 15%
-  - % laureati: peso 15%
-  - % occupati: peso 10%
-  - % premium: peso 10%
-- **Componente negativa**:
-  - % abitazioni vuote: peso -10%
-- **Calcolo**: somma pesata → rango percentile → scala 0-100
-- **Fonti combinate**: OSM + ISTAT 2023 + Sentinel-2
+### Qualità della vita (quality_score) — v4c
+
+- **Definizione**: indice composito che misura la qualità complessiva della vita nel quartiere, basato su cosa offre il quartiere (servizi, trasporti, infrastrutture) piuttosto che su chi ci abita
+- **Scala**: 0-100 (normalizzazione min-max tra i NIL eleggibili)
+- **Soglia di eleggibilità**: il NIL deve avere almeno **30 attività** e **2.000 residenti**. I NIL troppo piccoli (es. Parco Sempione, Roserio, Assiano) non ricevono un punteggio perché le metriche risultano distorte. Attualmente: 70 NIL eleggibili, 18 esclusi
+- **Struttura a 4 macro-componenti**:
+
+#### OFFERTA COMMERCIALE (42%) — mix e densità servizi privati
+| Componente | Peso | Descrizione |
+|---|---|---|
+| Entropia commerciale | 20% | Diversità del mix funzionale (Shannon normalizzato). Un quartiere con tanti tipi di servizi diversi è più vivibile |
+| Servizi essenziali per 1.000 ab. | 12% | `poi_density × poi_share_essential_services`. Misura quanti servizi essenziali ci sono **pro-capite**, non quale quota rappresentano |
+| Curva di densità (sigmoid) | 10% | Formula: `1 - exp(-d/20)`. Plateau sopra ~60 POI/1000ab. La sigmoid lenta discrimina meglio tra quartieri a bassa densità (periferici) e ad alta densità (centrali) |
+
+#### ACCESSIBILITÀ (17%) — connettività trasporto pubblico
+| Componente | Peso | Descrizione |
+|---|---|---|
+| Connettività trasporto | 17% | `metro_lines × 2 + tpl_lines`. Conta le **linee distinte** che servono il quartiere, non le fermate. Metro pesata solo 2× (non 5×): a Milano il tram è un mezzo primario, con linee ad alta frequenza (1, 3, 9, 15, 19) che valgono quasi quanto una metro. Non usa metriche per-capita (evita il bias dei quartieri poco popolati) |
+
+#### SERVIZI PUBBLICI (6%) — infrastrutture ufficiali
+| Componente | Peso | Descrizione |
+|---|---|---|
+| Impianti sportivi | 3% | `log(1 + count)` degli impianti sportivi nel NIL. Il logaritmo attenua gli outlier |
+| Parchi | 3% | Metri quadri di parco per residente, con cap a 10 mq/ab per rendimenti decrescenti |
+
+#### AMBIENTE (8%) — verde satellitare e costruito
+| Componente | Peso | Descrizione |
+|---|---|---|
+| NDVI (capped a 0.30) | +5% | Verde satellitare, complementare ai dati parchi. Cap per rendimenti decrescenti |
+| Builtup (floor a 0.15) | -2% | Penalità cemento attenuata |
+| Vacancy (floor a 15%) | -1% | Solo lo sfitto **anomalo** sopra il 15% viene penalizzato. Sotto il 15% è fisiologico in una città. In centro lo sfitto elevato riflette seconde case, investimenti e Airbnb, non degrado |
+
+#### STRUTTURA (-2%) — solo invecchiamento
+| Componente | Peso | Descrizione |
+|---|---|---|
+| Indice di vecchiaia | -2% | Penalità per invecchiamento estremo |
+
+> **Nota**: `pct_employed` è stato rimosso in v4c. In centro l'occupazione bassa riflette la composizione demografica (pensionati benestanti, studenti fuorisede, lavoratori autonomi) e non la qualità del quartiere. Questo indicatore favoriva sistematicamente i quartieri residenziali middle-class.
+
+- **Calcolo finale**: somma pesata di tutti i componenti → normalizzazione min-max a 0-100
+- **Correlazione con il prezzo**: r ≈ 0.62 — positiva e significativa. Non troppo alta (non è un proxy del prezzo) e non troppo bassa (cattura qualcosa di reale). Top-5: Duomo, Magenta, Brera, Guastalla, Isola
+- **Scelte metodologiche chiave**:
+  - **5 fonti dati indipendenti**: OSM (commercio), Comune di Milano (trasporti, sport, parchi), ISTAT (demografia), Sentinel-2 (verde/costruito), OMI (solo per il value_score)
+  - Connettività misurata in **linee distinte**, non fermate per-capita
+  - Metro × 2 (non × 5): il tram milanese è un mezzo primario
+  - Density sigmoid lenta (`d/20`): differenzia meglio quartieri densi vs sparsi
+  - Vacancy con floor al 15%: sfitto fisiologico non penalizzato
+  - Servizi essenziali **per capita** anziché **quota**: evita di premiare quartieri monotoni
+  - Nessun proxy di reddito (laureati, prezzi) per evitare circolarità con il value_score
+  - Min-max preserva le distanze reali
+- **Fonti combinate**: OSM + ISTAT 2023 + Sentinel-2 + Comune di Milano (TPL, metro, impianti sportivi, parchi)
 
 ### Rapporto qualità-prezzo (value_score)
 - **Definizione**: misura quanto la qualità della vita è superiore (o inferiore) a quanto ci si aspetterebbe dalla fascia di prezzo
@@ -284,6 +385,11 @@ Indicatori binari (presenti/assenti) che segnalano dinamiche in atto. Ogni segna
 | Censimento permanente | ISTAT | Popolazione, istruzione, abitazioni | 2023 | 7.095 sezioni censuarie → 88 NIL |
 | OpenStreetMap | Comunità OSM | Attività commerciali (POI) | Snapshot Q2 2026 | Puntuali → 88 NIL |
 | Sentinel-2 | ESA via Google Earth Engine | NDVI, indice di costruito | 2016-2026 (trimestrale) | Pixel 10m → griglia 350m → 88 NIL |
+| Fermate TPL | Comune di Milano | Fermate autobus e tram | Ultimo aggiornamento | 4.690 punti → 88 NIL |
+| Fermate Metro | Comune di Milano | Stazioni metropolitana | Ultimo aggiornamento | 130 punti → 88 NIL |
+| Impianti sportivi | Comune di Milano | Centri sportivi e impianti | Ultimo aggiornamento | 1.041 punti → 73 NIL |
+| Parchi e giardini | Comune di Milano | Aree verdi pubbliche | Ultimo aggiornamento | 1.065 poligoni → 53 NIL |
+| Biblioteche/Archivi | Comune di Milano | Biblioteche e archivi pubblici | 2007+ aggiornamenti | 232 punti → 54 NIL |
 | Confini NIL | Comune di Milano | Perimetri 88 quartieri PGT 2030 | Vigente | Poligoni |
 
 ---

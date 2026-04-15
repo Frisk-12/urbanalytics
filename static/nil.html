@@ -127,6 +127,77 @@
 
   /* Scrollbar */
   ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:#0d1117;} ::-webkit-scrollbar-thumb{background:#21262d;border-radius:3px;} ::-webkit-scrollbar-thumb:hover{background:#30363d;}
+
+  /* Mobile toggle button */
+  .mob-toggle{display:none;padding:8px 14px;border-top:1px solid #161b22;text-align:center;cursor:pointer;font-size:11px;color:#58a6ff;font-weight:600;background:#0d1117;user-select:none;}
+  .mob-toggle:active{background:#161b22;}
+
+  /* ===== MOBILE RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    body{flex-direction:column;overflow:hidden;}
+
+    /* Sidebar → compact top bar */
+    #sidebar{width:100%;min-width:100%;border-right:none;border-bottom:1px solid #21262d;overflow-y:auto;max-height:55vh;transition:max-height .3s ease;}
+    #sidebar.collapsed{max-height:none;overflow:visible;}
+
+    .s-head{padding:10px 14px 6px;}
+    .s-head h1{font-size:16px;}
+    .s-head p{font-size:9px;margin-top:1px;}
+
+    .kpi{padding:8px 4px;}
+    .kpi-v{font-size:14px;}
+    .kpi-l{font-size:7px;}
+
+    .ctrl{padding:6px 14px;}
+    .pills{gap:3px;}
+    .pill{font-size:9px;padding:4px 8px;border-radius:16px;}
+
+    .leg{padding:6px 14px;}
+
+    /* Ranking hidden by default on mobile */
+    .rank-controls,.rank-list{display:none;}
+    #sidebar.show-rank .rank-controls{display:flex;}
+    #sidebar.show-rank .rank-list{display:block;max-height:40vh;overflow-y:auto;}
+    .mob-toggle{display:block;}
+
+    /* Main map fills remaining space */
+    #main{flex:1;min-height:0;}
+    #map{min-height:200px;}
+
+    /* Detail → full-width bottom sheet */
+    #detail{flex-direction:column;height:0;max-height:80vh;position:fixed;bottom:0;left:0;right:0;z-index:1000;border-top:2px solid #58a6ff;box-shadow:0 -8px 30px rgba(0,0,0,.6);}
+    #detail.open{height:75vh;overflow-y:auto;}
+
+    #dl{width:100%;min-width:0;padding:14px 16px;border-right:none;border-bottom:1px solid #161b22;overflow-y:visible;}
+    #dl h2{font-size:16px;}
+    .narrative{font-size:10px;}
+
+    #dr{width:100%;padding:10px 14px;min-height:280px;}
+    #close-btn{top:8px;right:12px;font-size:28px;}
+    .tabs{flex-wrap:wrap;gap:2px;}
+    .tab{font-size:9px;padding:4px 10px;}
+
+    /* Tooltip: narrower on mobile */
+    .tt{max-width:220px!important;font-size:10px!important;padding:8px 10px!important;}
+
+    /* Leaflet controls: move zoom to not overlap sidebar */
+    .leaflet-top.leaflet-left{top:8px;left:8px;}
+
+    /* Overlay when detail open */
+    #mob-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:999;}
+    #mob-overlay.show{display:block;}
+  }
+
+  /* Small phones */
+  @media (max-width: 420px) {
+    .kpi-strip{grid-template-columns:repeat(2,1fr);}
+    .kpi{padding:6px 4px;}
+    .kpi-v{font-size:13px;}
+    .s-head h1{font-size:14px;}
+    .pill{font-size:8px;padding:3px 7px;}
+    #detail.open{height:85vh;}
+    #dl h2{font-size:14px;}
+  }
 </style>
 </head>
 <body>
@@ -177,8 +248,10 @@
   </div>
 
   <div class="rank-list" id="rank-list"></div>
+  <div class="mob-toggle" id="mob-rank-toggle">📊 Mostra classifica</div>
 </div>
 
+<div id="mob-overlay"></div>
 <div id="main">
   <div id="map"></div>
   <div id="detail">
@@ -376,7 +449,10 @@ async function loadMap(){
       // Layer-specific highlight
       if(layer==='value'&&p.value_score!=null) t+=`<br>⭐ Rapporto Q/P: <b>${Math.round(p.value_score)}/100</b>`;
       if(layer==='iai'&&p.iai_score!=null) t+=`<br>📊 Attrattività investimento: <b>${Math.round(p.iai_score)}/100</b>`;
-      if(layer==='quality'&&p.quality_score!=null) t+=`<br>🏆 Qualità vita: <b>${Math.round(p.quality_score)}/100</b>`;
+      if(layer==='quality'&&p.quality_score!=null) {
+        t+=`<br>🏆 Qualità vita: <b>${Math.round(p.quality_score)}/100</b>`;
+        if(p.connectivity!=null) t+=`<br>🚇 Connettività: ${Math.round(p.connectivity)} (${p.metro_lines||0} linee metro)`;
+      }
       if(layer==='services'&&p.poi_density!=null) t+=`<br>🏪 ${p.poi_density.toFixed(1)} attività per 1000 ab.`;
       if(layer==='education'&&p.pct_tertiary!=null) t+=`<br>🎓 ${(p.pct_tertiary*100).toFixed(0)}% laureati`;
       if(layer==='foreign'&&p.pct_foreign!=null) t+=`<br>🌍 ${(p.pct_foreign*100).toFixed(0)}% stranieri`;
@@ -395,6 +471,7 @@ function restyle(){if(geoL&&lastGJ) geoL.eachLayer(ly=>ly.setStyle(nilStyle(ly.f
 async function loadDetail(nilId){
   const r=await fetch(`/api/nil/${nilId}`);lastDetail=await r.json();
   document.getElementById('detail').classList.add('open');
+  document.getElementById('mob-overlay').classList.add('show');
   renderLeft();renderChart(chartTab);
 }
 
@@ -418,6 +495,14 @@ function renderLeft(){
   if(s.price_change_10y!=null) h+=mr('Trend 10 anni','+'+(s.price_change_10y*100).toFixed(0)+'%',s.price_change_10y>.50?'up':'muted');
   if(s.quality_score!=null) h+=mr('Qualità vita',Math.round(s.quality_score)+'/100','blue');
   if(s.value_score!=null) h+=mr('Rapporto Q/P',Math.round(s.value_score)+'/100',s.value_score>60?'up':s.value_score<40?'down':'muted');
+
+  // --- Infrastructure ---
+  if(s.connectivity!=null || s.sport_facilities!=null) {
+    h+=`<div class="sec">Infrastrutture</div>`;
+    if(s.connectivity!=null) h+=mr('Connettività TPL',Math.round(s.connectivity)+' ('+Math.round(s.metro_lines||0)+' linee metro, '+Math.round(s.tpl_lines||0)+' linee bus/tram)',s.connectivity>20?'blue':'muted');
+    if(s.sport_facilities!=null) h+=mr('Impianti sportivi',Math.round(s.sport_facilities),'muted');
+    if(s.park_mq_per_capita!=null && s.park_mq_per_capita>0) h+=mr('Parchi',s.park_mq_per_capita.toFixed(1)+' mq/ab','muted');
+  }
 
   // --- Demographics ---
   h+=`<div class="sec">Chi vive qui</div>`;
@@ -652,7 +737,21 @@ document.querySelectorAll('.pill').forEach(p=>{
 
 document.getElementById('rank-metric').addEventListener('change',updateRankList);
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>renderChart(t.dataset.t)));
-document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');selNil=null;restyle();updateRankList();});
+document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');document.getElementById('mob-overlay').classList.remove('show');selNil=null;restyle();updateRankList();});
+
+// Mobile: ranking toggle
+document.getElementById('mob-rank-toggle').addEventListener('click',function(){
+  const sb=document.getElementById('sidebar');
+  const show=sb.classList.toggle('show-rank');
+  this.textContent=show?'✕ Chiudi classifica':'📊 Mostra classifica';
+});
+
+// Mobile: overlay closes detail
+document.getElementById('mob-overlay').addEventListener('click',()=>{
+  document.getElementById('detail').classList.remove('open');
+  document.getElementById('mob-overlay').classList.remove('show');
+  selNil=null;restyle();updateRankList();
+});
 
 // ========== INIT ==========
 (async()=>{await loadQQ();await loadOverview();await loadRankings();updateLeg();loadMap();})();

@@ -92,6 +92,17 @@ class NilStore:
         latest_q = self.quarters[-1]
         self.latest = self.panel[self.panel["year_quarter"] == latest_q].set_index("nil_id").copy()
 
+        # Satellite data may lag — fill from most recent available quarter
+        sat_cols = ["ndvi_mean", "builtup_mean"]
+        if self.latest[sat_cols].isna().all().all():
+            for q in reversed(self.quarters[:-1]):
+                fallback = self.panel[self.panel["year_quarter"] == q].set_index("nil_id")
+                if fallback[sat_cols].notna().any().any():
+                    for c in sat_cols:
+                        self.latest[c] = fallback[c]
+                    print(f"[NilStore] Satellite data from {q} (latest {latest_q} empty)")
+                    break
+
         # --- Precompute everything ---
         self._build_master()  # unified analysis dataframe
         self._compute_z_scores()
@@ -159,6 +170,22 @@ class NilStore:
             if c in self.latest.columns:
                 m[c] = self.latest[c]
 
+        # Infrastructure (Comune di Milano open data)
+        infra_path = BASE / "data" / "nil" / "nil_infrastructure.parquet"
+        if infra_path.exists():
+            infra = pd.read_parquet(infra_path).set_index("nil_id")
+            for c in infra.columns:
+                m[c] = infra[c]
+
+            # Derived: per-capita infrastructure metrics
+            pop = m["pop_tot"].replace(0, np.nan)
+            # Transit: metro weighted 3× (higher impact than bus stop)
+            m["transit_per_1000"] = (m["tpl_stops"].fillna(0) + m["metro_stops"].fillna(0) * 3) / pop * 1000
+            m["has_metro"] = (m["metro_stops"].fillna(0) > 0).astype(int)
+            m["sport_per_1000"] = m["sport_facilities"].fillna(0) / pop * 1000
+            m["libraries_per_10000"] = m["libraries"].fillna(0) / pop * 10000
+            m["park_mq_per_capita"] = m["park_area_mq"].fillna(0) / pop
+
         # Flag: significant (enough POI for statistics)
         m["is_significant"] = m["poi_count"] >= MIN_POI_SIGNIFICANT
 
@@ -177,7 +204,9 @@ class NilStore:
             "poi_count", "poi_density", "poi_premium_share", "poi_entropy",
             "price_sqm", "price_change_5y", "pct_foreign", "pct_tertiary",
             "pct_old", "pct_young", "pct_housing_empty", "aging_index",
-            "poi_turnover", "residents_per_poi", "ndvi_mean",
+            "poi_turnover", "residents_per_poi", "ndvi_mean", "pct_employed",
+            "transit_per_1000", "sport_per_1000", "libraries_per_10000",
+            "park_mq_per_capita",
         ]
 
         self.z_scores = {}
@@ -210,44 +239,127 @@ class NilStore:
     def _compute_value_score(self):
         """
         Value = quality of neighborhood life per EUR/sqm spent.
-        Quality factors: commercial diversity, services density, green,
-                         education level, low vacancy.
-        Price: OMI price/sqm.
 
-        Score = quality_composite / price_normalized
-        Higher = more value for money.
+        Quality score (v4c) — arricchito con dati Comune di Milano:
+          Threshold: poi_count >= 30 AND pop_tot >= 2000
+          OFFERTA COMMERCIALE (42%) — mix e densità servizi privati
+            poi_entropy:              20%  diversità mix funzionale
+            essential_per_1000:       12%  servizi essenziali per capita
+            density_curve (sigmoid):  10%  1-exp(-d/20), plateau sopra ~60 POI/1000ab
+          ACCESSIBILITÀ (17%) — connettività trasporto pubblico
+            connectivity:             17%  metro_lines×2 + tpl_lines
+          SERVIZI PUBBLICI (6%) — infrastrutture ufficiali Comune
+            sport_facilities (log):    3%  log(1+count)
+            park_area (mq, capped):    3%  mq di parco per residente
+          AMBIENTE (8%) — verde e costruito
+            ndvi_mean (capped .30):    5%  verde
+            builtup (floored .15):    -2%  penalità cemento
+            vacancy (floor 15%):      -1%  solo vacancy anomalo (>15%)
+          STRUTTURA (-2%) — solo invecchiamento
+            aging_index:              -2%  penalità invecchiamento
+
+          Note v4c:
+            - density sigmoid rallentata (d/20): discrimina meglio densità basse vs alte
+            - metro_lines×2 (non ×5): tram è mezzo primario a Milano
+            - pct_employed rimosso: in centro misura chi ci abita, non qualità
+            - Vacancy con floor 15% e peso -1%: sfitto centrale = investimento/Airbnb
+
+          Fonti: OSM, ISTAT 2023, OMI, Sentinel-2, Comune di Milano open data
         """
         m = self.master
 
-        # Quality composite (0-100)
-        # Each component normalized to 0-1 using percentile rank
-        components = {
-            "poi_entropy": 0.20,       # commercial diversity
-            "poi_density": 0.20,       # services accessibility
-            "ndvi_mean": 0.15,         # green/livability
-            "pct_tertiary": 0.15,      # education (proxy for safety/civicness)
-            "pct_employed": 0.10,      # economic activity
-            "poi_premium_share": 0.10, # quality of commerce
-        }
+        # --- Eligibility: only score neighborhoods with real urban fabric ---
+        poi_ok = m["poi_count"].fillna(0) >= 30 if "poi_count" in m.columns else True
+        pop_ok = m["pop_tot"].fillna(0) >= 2000 if "pop_tot" in m.columns else True
+        eligible = poi_ok & pop_ok
 
-        # Negative components (penalize)
-        neg_components = {
-            "pct_housing_empty": 0.10,  # vacancy = decay signal
-        }
+        # --- Non-linear density: asymmetric sigmoid ---
+        if "poi_density" in m.columns:
+            d = m["poi_density"].fillna(0)
+            m["density_curve"] = 1 - np.exp(-d / 20)
 
-        quality = pd.Series(0.0, index=m.index)
-        for metric, weight in components.items():
-            pctl_col = f"pctl_{metric}"
-            if pctl_col in m.columns:
-                quality += m[pctl_col].fillna(0.5) * weight
+        # --- Essential services PER CAPITA ---
+        if "poi_share_essential_services" in m.columns and "poi_density" in m.columns:
+            m["essential_per_1000"] = m["poi_density"] * m["poi_share_essential_services"]
+            m["pctl_essential_pc"] = m["essential_per_1000"].rank(pct=True)
 
-        for metric, weight in neg_components.items():
-            pctl_col = f"pctl_{metric}"
-            if pctl_col in m.columns:
-                quality -= m[pctl_col].fillna(0.5) * weight
+        # --- Transit connectivity (NOT per-capita!) ---
+        # metro_lines×2 + tpl_lines: tram is a primary mode in Milan
+        if "metro_lines" in m.columns and "tpl_lines" in m.columns:
+            m["connectivity"] = m["metro_lines"].fillna(0) * 2 + m["tpl_lines"].fillna(0)
+            m["pctl_connectivity"] = m["connectivity"].rank(pct=True)
 
-        # Normalize quality to 0-100
-        quality = quality.rank(pct=True) * 100
+        # --- Sport facilities (log to dampen outliers) ---
+        if "sport_facilities" in m.columns:
+            m["sport_log"] = np.log1p(m["sport_facilities"].fillna(0))
+            m["pctl_sport"] = m["sport_log"].rank(pct=True)
+
+        # --- Park area per capita (capped at 10 mq/ab) ---
+        if "park_mq_per_capita" in m.columns:
+            park_adj = m["park_mq_per_capita"].fillna(0).clip(upper=10)
+            m["pctl_park"] = park_adj.rank(pct=True)
+
+        # --- Aging penalty ---
+        if "aging_index" in m.columns:
+            m["pctl_aging"] = m["aging_index"].rank(pct=True)
+
+        # --- NDVI with diminishing returns (cap at 0.30) ---
+        if "ndvi_mean" in m.columns:
+            ndvi_adj = m["ndvi_mean"].fillna(0).clip(upper=0.30)
+            m["ndvi_adj_pctl"] = ndvi_adj.rank(pct=True)
+
+        # --- Builtup with floor (0.15) ---
+        if "builtup_mean" in m.columns:
+            built_adj = m["builtup_mean"].fillna(0.5).clip(lower=0.15)
+            m["builtup_adj_pctl"] = built_adj.rank(pct=True)
+
+        # --- Vacancy with floor at 15% (below is physiological) ---
+        if "pct_housing_empty" in m.columns:
+            vacancy_excess = (m["pct_housing_empty"].fillna(0.15) - 0.15).clip(lower=0)
+            m["pctl_vacancy_excess"] = vacancy_excess.rank(pct=True)
+
+        # --- Build quality composite (only for eligible NIL) ---
+        raw = pd.Series(0.0, index=m.index)
+
+        # OFFERTA COMMERCIALE (42%)
+        if "pctl_poi_entropy" in m.columns:
+            raw += m["pctl_poi_entropy"].fillna(0.5) * 0.20
+        if "pctl_essential_pc" in m.columns:
+            raw += m["pctl_essential_pc"].fillna(0.5) * 0.12
+        if "density_curve" in m.columns:
+            raw += m["density_curve"].fillna(0.0) * 0.10
+
+        # ACCESSIBILITÀ (17%)
+        if "pctl_connectivity" in m.columns:
+            raw += m["pctl_connectivity"].fillna(0.5) * 0.17
+
+        # SERVIZI PUBBLICI (6%)
+        if "pctl_sport" in m.columns:
+            raw += m["pctl_sport"].fillna(0.5) * 0.03
+        if "pctl_park" in m.columns:
+            raw += m["pctl_park"].fillna(0.5) * 0.03
+
+        # AMBIENTE (8%)
+        if "ndvi_adj_pctl" in m.columns:
+            raw += m["ndvi_adj_pctl"].fillna(0.5) * 0.05
+        if "builtup_adj_pctl" in m.columns:
+            raw -= m["builtup_adj_pctl"].fillna(0.5) * 0.02
+        if "pctl_vacancy_excess" in m.columns:
+            raw -= m["pctl_vacancy_excess"].fillna(0.5) * 0.01
+
+        # STRUTTURA (-2%) — solo invecchiamento
+        if "pctl_aging" in m.columns:
+            raw -= m["pctl_aging"].fillna(0.5) * 0.02
+
+        # Min-max normalize to 0-100 (only eligible NIL)
+        quality = pd.Series(np.nan, index=m.index)
+        raw_elig = raw[eligible]
+        if len(raw_elig) > 1:
+            lo, hi = raw_elig.min(), raw_elig.max()
+            if hi > lo:
+                quality[eligible] = ((raw_elig - lo) / (hi - lo) * 100).round(1)
+            else:
+                quality[eligible] = 50.0
         m["quality_score"] = quality
 
         # Price percentile (inverted: lower price = more affordable = higher value)
@@ -779,6 +891,13 @@ class NilStore:
                 "iai_score": _safe(row.get("iai_score")),
                 # Satellite
                 "ndvi": _safe(row.get("ndvi_mean")),
+                # Infrastructure (Comune di Milano)
+                "connectivity": _safe(row.get("connectivity")),
+                "metro_stops": _safe(row.get("metro_stops")),
+                "metro_lines": _safe(row.get("metro_lines")),
+                "tpl_lines": _safe(row.get("tpl_lines")),
+                "sport_facilities": _safe(row.get("sport_facilities")),
+                "park_mq_per_capita": _safe(row.get("park_mq_per_capita")),
                 # Significance
                 "significant": bool(row.get("is_significant", False)),
             }
@@ -839,8 +958,8 @@ class NilStore:
         radar = {}
         radar_metrics = {
             "poi_density": "Servizi",
-            "poi_entropy": "Diversita",
-            "poi_premium_share": "Premium",
+            "poi_entropy": "Diversità",
+            "transit_per_1000": "Trasporti",
             "pct_tertiary": "Istruzione",
             "ndvi_mean": "Verde",
             "price_sqm": "Prezzo",
@@ -874,6 +993,13 @@ class NilStore:
             "aging_index": _safe(row.get("aging_index")),
             "pct_housing_empty": _safe(row.get("pct_housing_empty")),
             "ndvi": _safe(row.get("ndvi_mean")),
+            # Infrastructure (Comune di Milano)
+            "connectivity": _safe(row.get("connectivity")),
+            "metro_stops": _safe(row.get("metro_stops")),
+            "metro_lines": _safe(row.get("metro_lines")),
+            "tpl_lines": _safe(row.get("tpl_lines")),
+            "sport_facilities": _safe(row.get("sport_facilities")),
+            "park_mq_per_capita": _safe(row.get("park_mq_per_capita")),
         }
 
         # --- Narrative ---
