@@ -18,7 +18,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{font-family:'Inter',system-ui,sans-serif;display:flex;height:100vh;background:#0a0e13;color:#c9d1d9;overflow:hidden;}
+  body{font-family:'Inter',system-ui,sans-serif;display:flex;height:100vh;height:100dvh;background:#0a0e13;color:#c9d1d9;overflow:hidden;}
 
   /* ===== SIDEBAR ===== */
   #sidebar{width:360px;min-width:360px;background:#0d1117;display:flex;flex-direction:column;border-right:1px solid #21262d;overflow:hidden;}
@@ -169,8 +169,8 @@
     #map{min-height:200px;}
 
     /* Detail → full-width bottom sheet */
-    #detail{flex-direction:column;height:0;max-height:80vh;position:fixed;bottom:0;left:0;right:0;z-index:1000;border-top:2px solid #58a6ff;box-shadow:0 -8px 30px rgba(0,0,0,.6);}
-    #detail.open{height:75vh;overflow-y:auto;}
+    #detail{flex-direction:column;height:0;max-height:80dvh;position:fixed;bottom:0;left:0;right:0;z-index:1000;border-top:2px solid #58a6ff;box-shadow:0 -8px 30px rgba(0,0,0,.6);}
+    #detail.open{height:75dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 
     #dl{width:100%;min-width:0;padding:14px 16px;border-right:none;border-bottom:1px solid #161b22;overflow-y:visible;}
     #dl h2{font-size:16px;}
@@ -280,8 +280,11 @@
 // ========== STATE ==========
 let QQ=[], layer='value', chartTab='radar', chart=null, selNil=null, lastGJ=null, lastDetail=null, rankings={};
 
+// ========== UTILS ==========
+const isMobile = () => window.innerWidth <= 768;
+
 // ========== MAP ==========
-const M = L.map('map',{zoomControl:true}).setView([45.464,9.19],12);
+const M = L.map('map',{zoomControl:true,tap:true,tapTolerance:15}).setView([45.464,9.19],12);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'CartoDB',maxZoom:18}).addTo(M);
 let geoL = null;
 
@@ -439,9 +442,23 @@ async function loadMap(){
     style: nilStyle,
     onEachFeature: (f, ly) => {
       const p=f.properties;
-      ly.on('mouseover',()=>{ly.setStyle({weight:2.5,color:'#58a6ff',fillOpacity:.9});ly.bringToFront();});
-      ly.on('mouseout',()=>{if(p.nil_id!==selNil) ly.setStyle(nilStyle(f));});
-      ly.on('click',()=>{selNil=p.nil_id;loadDetail(p.nil_id);restyle();updateRankList();});
+
+      // Hover effects: desktop only
+      if(!isMobile()) {
+        ly.on('mouseover',()=>{ly.setStyle({weight:2.5,color:'#58a6ff',fillOpacity:.9});ly.bringToFront();});
+        ly.on('mouseout',()=>{if(p.nil_id!==selNil) ly.setStyle(nilStyle(f));});
+      }
+
+      // Click: open detail (on mobile, also close sidebar first)
+      ly.on('click',()=>{
+        if(isMobile()){
+          const sb=document.getElementById('sidebar');
+          sb.classList.remove('mob-open','show-rank');
+          document.getElementById('mob-sidebar-btn').textContent='☰';
+          document.getElementById('mob-rank-toggle').textContent='📊 Mostra classifica';
+        }
+        selNil=p.nil_id;loadDetail(p.nil_id);restyle();updateRankList();
+      });
 
       // Rich tooltip
       let t=`<b>${p.emoji||''} ${p.name}</b>`;
@@ -467,7 +484,8 @@ async function loadMap(){
       if(p.tags&&p.tags.length) t+=`<br><span style="color:#484f58;font-size:9px">${p.tags.slice(0,3).join(' · ')}</span>`;
       if(!p.significant) t+=`<br><span style="color:#484f58;font-size:8px">⚠ Dati limitati (<30 attività)</span>`;
 
-      ly.bindTooltip(t,{sticky:true,className:'tt'});
+      // Tooltip: sticky on desktop, static on mobile (touch-friendly)
+      ly.bindTooltip(t,{sticky:!isMobile(),className:'tt',permanent:false});
     }
   }).addTo(M);
 }
@@ -744,7 +762,7 @@ document.querySelectorAll('.pill').forEach(p=>{
 
 document.getElementById('rank-metric').addEventListener('change',updateRankList);
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>renderChart(t.dataset.t)));
-document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');document.getElementById('mob-overlay').classList.remove('show');selNil=null;restyle();updateRankList();});
+document.getElementById('close-btn').addEventListener('click',()=>{document.getElementById('detail').classList.remove('open');document.getElementById('mob-overlay').classList.remove('show');selNil=null;restyle();updateRankList();if(isMobile())setTimeout(()=>M.invalidateSize(),350);});
 
 // Mobile: sidebar expand/collapse
 document.getElementById('mob-head').addEventListener('click',function(e){
@@ -754,6 +772,8 @@ document.getElementById('mob-head').addEventListener('click',function(e){
   sb.classList.toggle('mob-open');
   document.getElementById('mob-sidebar-btn').textContent=opening?'✕':'☰';
   document.getElementById('mob-overlay').classList.toggle('show',opening);
+  // Tell Leaflet the map container resized
+  setTimeout(()=>M.invalidateSize(),350);
 });
 
 // Mobile: ranking toggle (inside expanded sidebar)
@@ -772,6 +792,7 @@ document.getElementById('mob-overlay').addEventListener('click',()=>{
   document.getElementById('detail').classList.remove('open');
   document.getElementById('mob-overlay').classList.remove('show');
   selNil=null;restyle();updateRankList();
+  setTimeout(()=>M.invalidateSize(),350);
 });
 
 // ========== INIT ==========
