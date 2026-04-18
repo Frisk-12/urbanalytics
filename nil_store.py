@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-BASE = pathlib.Path(__file__).resolve().parent
+BASE = pathlib.Path(__file__).resolve().parent.parent
 WEBAPP = pathlib.Path(__file__).resolve().parent
 
 # --- Category labels & colors ---
@@ -67,12 +67,16 @@ def _fmt_eur(v):
 class NilStore:
     def __init__(self):
         # --- Load data ---
-        self.panel = pd.read_parquet(BASE / "data" / "nil" / "nil_panel.parquet")
-        self.census = pd.read_parquet(BASE / "data" / "nil" / "nil_census.parquet")
-        self.prices = pd.read_parquet(BASE / "data" / "nil" / "nil_price_summary.parquet")
-        self.price_ts = pd.read_parquet(BASE / "data" / "nil" / "nil_prices.parquet")
+        self.panel = pd.read_parquet(BASE / "OUTPUT" / "nil" / "nil_panel.parquet")
+        self.census = pd.read_parquet(BASE / "OUTPUT" / "nil" / "nil_census.parquet")
+        self.prices = pd.read_parquet(BASE / "OUTPUT" / "nil" / "nil_price_summary.parquet")
+        self.price_ts = pd.read_parquet(BASE / "OUTPUT" / "nil" / "nil_prices.parquet")
+        airbnb_path = BASE / "OUTPUT" / "nil" / "nil_airbnb.parquet"
+        self.airbnb = pd.read_parquet(airbnb_path).set_index("nil_id") if airbnb_path.exists() else None
+        ztl_path = BASE / "OUTPUT" / "nil" / "nil_ztl.parquet"
+        self.ztl = pd.read_parquet(ztl_path).set_index("nil_id") if ztl_path.exists() else None
 
-        with open(BASE / "data" / "geojson" / "nil_milano.geojson") as f:
+        with open(BASE / "INPUT" / "ISTAT_limiti_comunali" / "nil_milano.geojson") as f:
             gj = json.load(f)
         self.nil_geom = {
             feat["properties"]["ID_NIL"]: feat["geometry"]
@@ -171,7 +175,7 @@ class NilStore:
                 m[c] = self.latest[c]
 
         # Infrastructure (Comune di Milano open data)
-        infra_path = BASE / "data" / "nil" / "nil_infrastructure.parquet"
+        infra_path = BASE / "OUTPUT" / "nil" / "nil_infrastructure.parquet"
         if infra_path.exists():
             infra = pd.read_parquet(infra_path).set_index("nil_id")
             for c in infra.columns:
@@ -185,6 +189,25 @@ class NilStore:
             m["sport_per_1000"] = m["sport_facilities"].fillna(0) / pop * 1000
             m["libraries_per_10000"] = m["libraries"].fillna(0) / pop * 10000
             m["park_mq_per_capita"] = m["park_area_mq"].fillna(0) / pop
+
+        # Airbnb pressure (Inside Airbnb 2025-09-22 snapshot)
+        if self.airbnb is not None:
+            airbnb_cols = ["airbnb_per_1000", "entire_per_1000", "commercial_per_1000",
+                           "commercial_share", "multi_host_share", "median_price", "total_listings"]
+            for c in airbnb_cols:
+                if c in self.airbnb.columns:
+                    m[c] = self.airbnb[c]
+            # Combined pressure: entire homes weighted by professional-host share
+            m["airbnb_pressure"] = (
+                m["entire_per_1000"].fillna(0)
+                * (0.6 + m["multi_host_share"].fillna(0) * 0.4)
+            )
+
+        # ZTL / aree pedonali
+        if self.ztl is not None:
+            for c in ["pct_ap", "pct_ztl", "pct_quiet"]:
+                if c in self.ztl.columns:
+                    m[c] = self.ztl[c]
 
         # Flag: significant (enough POI for statistics)
         m["is_significant"] = m["poi_count"] >= MIN_POI_SIGNIFICANT
@@ -240,31 +263,46 @@ class NilStore:
         """
         Value = quality of neighborhood life per EUR/sqm spent.
 
-        Quality score (v4c) — arricchito con dati Comune di Milano:
+        Quality score (v4e) — revisione profonda della formula:
           Threshold: poi_count >= 30 AND pop_tot >= 2000
+
           OFFERTA COMMERCIALE (42%) — mix e densità servizi privati
             poi_entropy:              20%  diversità mix funzionale
             essential_per_1000:       12%  servizi essenziali per capita
-            density_curve (sigmoid):  10%  1-exp(-d/20), plateau sopra ~60 POI/1000ab
-          ACCESSIBILITÀ (17%) — connettività trasporto pubblico
+            density_curve (bell):     10%  sigmoid × rolloff gaussiano >50 POI/1000
+                                           Picco a ~50 POI/1000, penalizza saturazione
+                                           commerciale (Duomo 96→0.43, Brera 65→0.88)
+          ACCESSIBILITÀ (17%)
             connectivity:             17%  metro_lines×2 + tpl_lines
-          SERVIZI PUBBLICI (6%) — infrastrutture ufficiali Comune
-            sport_facilities (log):    3%  log(1+count)
-            park_area (mq, capped):    3%  mq di parco per residente
-          AMBIENTE (8%) — verde e costruito
-            ndvi_mean (capped .30):    5%  verde
-            builtup (floored .15):    -2%  penalità cemento
-            vacancy (floor 15%):      -1%  solo vacancy anomalo (>15%)
-          STRUTTURA (-2%) — solo invecchiamento
-            aging_index:              -2%  penalità invecchiamento
+          SERVIZI PUBBLICI (5%) — infrastrutture Comune
+            sport_facilities (log):    3%
+            park_area (mq, capped):    2%  (ridotto da 3% per bilanciare periferia)
+          AMBIENTE (7%) — verde e costruito
+            ndvi_mean (capped .30):    4%  (ridotto da 5%)
+            builtup (floored .15):    -2%
+            vacancy (floor 15%):      -1%
+          STRUTTURA (-2%)
+            aging_index:              -2%
+          TURISMO (-7%) — solo ECCESSO sopra soglia fisiologica
+            airbnb_excess:            -7%  entire/1000 sopra 35 (soglia città)
+                                           Sarpi 30.3 < 35 → zero penalità
+                                           Duomo 66.2: excess 31.2 → forte penalità
+                                           Naviglio 47.4: excess 12.4 → moderata
+          SATURAZIONE COMMERCIALE (-6%) — polo attrattore, non residenziale
+            residents_per_poi < 20:   -6%  lineare, max a rpp=0
+                                           Duomo rpp=10 → -3%, Brera rpp=15 → -1.4%
+          SERVIZIO MINIMO (-5%) — penalità per zone con pochi servizi
+            density_floor:            -5%  se poi_density < 80% mediana città
+                                           Discrimina periferia con pochi POI
+                                           vs quartieri urbani vivaci (Sarpi d=25)
 
-          Note v4c:
-            - density sigmoid rallentata (d/20): discrimina meglio densità basse vs alte
-            - metro_lines×2 (non ×5): tram è mezzo primario a Milano
-            - pct_employed rimosso: in centro misura chi ci abita, non qualità
-            - Vacancy con floor 15% e peso -1%: sfitto centrale = investimento/Airbnb
-
-          Fonti: OSM, ISTAT 2023, OMI, Sentinel-2, Comune di Milano open data
+          Note v4e vs v4d:
+            - density_curve passa da sigmoidale a bell-curve (Duomo 0.99→0.43)
+            - Airbnb: threshold 35 entire/1000 — Sarpi (30.3) non penalizzato
+            - Commercial saturation: Duomo e Brera penalizzati per rpp basso
+            - Density floor: quartieri con pochi POI non premiati dal verde/park
+            - Park e NDVI ridotti (-2%) per non sovra-premiare la periferia
+            - Risultato: Duomo #11, Sarpi #14, Magenta #1, Guastalla #2
         """
         m = self.master
 
@@ -273,10 +311,15 @@ class NilStore:
         pop_ok = m["pop_tot"].fillna(0) >= 2000 if "pop_tot" in m.columns else True
         eligible = poi_ok & pop_ok
 
-        # --- Non-linear density: asymmetric sigmoid ---
+        # --- Non-linear density: bell-curve (sigmoid × Gaussian rolloff) ---
+        # Picco intorno a 50 POI/1000 ab (ottimale residenziale).
+        # Sopra 60+: rolloff gaussiano penalizza la saturazione commerciale.
+        # Duomo (d=96): 0.99→0.43, Brera (d=65): 0.96→0.88, Sarpi (d=25): 0.71→0.71
         if "poi_density" in m.columns:
             d = m["poi_density"].fillna(0)
-            m["density_curve"] = 1 - np.exp(-d / 20)
+            ascending = 1 - np.exp(-d / 20)
+            rolloff = np.exp(-((d - 50.0).clip(lower=0) / 50.0) ** 2)
+            m["density_curve"] = ascending * rolloff
 
         # --- Essential services PER CAPITA ---
         if "poi_share_essential_services" in m.columns and "poi_density" in m.columns:
@@ -318,6 +361,37 @@ class NilStore:
             vacancy_excess = (m["pct_housing_empty"].fillna(0.15) - 0.15).clip(lower=0)
             m["pctl_vacancy_excess"] = vacancy_excess.rank(pct=True)
 
+        # --- Airbnb EXCESS above physiological threshold ---
+        # Soglia 35 entire/1000: sotto è fisiologico per centro città italiano.
+        # Solo l'eccesso viene penalizzato. Sarpi (30.3) → zero penalità.
+        # Duomo (66.2) → eccesso 31.2 → forte penalità.
+        if "entire_per_1000" in m.columns:
+            ab_threshold = 35.0
+            ab_excess = (m["entire_per_1000"].fillna(0) - ab_threshold).clip(lower=0)
+            cap_95 = ab_excess.quantile(0.95)
+            # Percentile rank only where there IS excess (others get 0)
+            has_excess = ab_excess > 0
+            m["pctl_airbnb_excess"] = 0.0
+            m.loc[has_excess, "pctl_airbnb_excess"] = (
+                ab_excess[has_excess].clip(upper=cap_95).rank(pct=True)
+            )
+
+        # --- Commercial saturation penalty (residents_per_poi < 20) ---
+        # Quartieri con <20 residenti/attività sono hub commerciali/turistici,
+        # non residenziali. Penalità lineare: max a rpp=0, zero a rpp=20.
+        if "residents_per_poi" in m.columns:
+            rpp = m["residents_per_poi"].fillna(70)
+            m["sat_penalty"] = ((20 - rpp) / 20).clip(lower=0)
+
+        # --- Density floor penalty (below 80% of city median) ---
+        # Evita che zone periferiche con pochi servizi vengano premiate
+        # da verde e bassa pressione Airbnb sopra quartieri urbani vivaci.
+        if "poi_density" in m.columns:
+            median_d = m["poi_density"].median()
+            floor_d = median_d * 0.8
+            m["density_floor_penalty"] = ((floor_d - m["poi_density"].fillna(0))
+                                          .clip(lower=0) / floor_d)
+
         # --- Build quality composite (only for eligible NIL) ---
         raw = pd.Series(0.0, index=m.index)
 
@@ -333,23 +407,35 @@ class NilStore:
         if "pctl_connectivity" in m.columns:
             raw += m["pctl_connectivity"].fillna(0.5) * 0.17
 
-        # SERVIZI PUBBLICI (6%)
+        # SERVIZI PUBBLICI (5%)
         if "pctl_sport" in m.columns:
             raw += m["pctl_sport"].fillna(0.5) * 0.03
         if "pctl_park" in m.columns:
-            raw += m["pctl_park"].fillna(0.5) * 0.03
+            raw += m["pctl_park"].fillna(0.5) * 0.02   # 3%→2%
 
-        # AMBIENTE (8%)
+        # AMBIENTE (7%)
         if "ndvi_adj_pctl" in m.columns:
-            raw += m["ndvi_adj_pctl"].fillna(0.5) * 0.05
+            raw += m["ndvi_adj_pctl"].fillna(0.5) * 0.04  # 5%→4%
         if "builtup_adj_pctl" in m.columns:
             raw -= m["builtup_adj_pctl"].fillna(0.5) * 0.02
         if "pctl_vacancy_excess" in m.columns:
             raw -= m["pctl_vacancy_excess"].fillna(0.5) * 0.01
 
-        # STRUTTURA (-2%) — solo invecchiamento
+        # STRUTTURA (-2%)
         if "pctl_aging" in m.columns:
             raw -= m["pctl_aging"].fillna(0.5) * 0.02
+
+        # TURISMO (-7%) — solo eccesso sopra soglia fisiologica 35 entire/1000
+        if "pctl_airbnb_excess" in m.columns:
+            raw -= m["pctl_airbnb_excess"].fillna(0.0) * 0.07
+
+        # SATURAZIONE COMMERCIALE (-6%) — rpp < 20 → hub, non residenziale
+        if "sat_penalty" in m.columns:
+            raw -= m["sat_penalty"].fillna(0.0) * 0.06
+
+        # DENSITÀ FLOOR (-5%) — penalizza zone con meno dell'80% della mediana
+        if "density_floor_penalty" in m.columns:
+            raw -= m["density_floor_penalty"].fillna(0.0) * 0.05
 
         # Min-max normalize to 0-100 (only eligible NIL)
         quality = pd.Series(np.nan, index=m.index)
@@ -898,6 +984,16 @@ class NilStore:
                 "tpl_lines": _safe(row.get("tpl_lines")),
                 "sport_facilities": _safe(row.get("sport_facilities")),
                 "park_mq_per_capita": _safe(row.get("park_mq_per_capita")),
+                # Airbnb (Inside Airbnb 2025-09-22)
+                "airbnb_total": _safe(row.get("total_listings")),
+                "airbnb_per_1000": _safe(row.get("airbnb_per_1000")),
+                "entire_per_1000": _safe(row.get("entire_per_1000")),
+                "airbnb_commercial_share": _safe(row.get("commercial_share")),
+                "airbnb_multi_host": _safe(row.get("multi_host_share")),
+                "airbnb_median_price": _safe(row.get("median_price")),
+                # ZTL / Aree Pedonali (Comune di Milano)
+                "pct_ap": _safe(row.get("pct_ap")),
+                "pct_quiet": _safe(row.get("pct_quiet")),
                 # Significance
                 "significant": bool(row.get("is_significant", False)),
             }
@@ -1000,6 +1096,16 @@ class NilStore:
             "tpl_lines": _safe(row.get("tpl_lines")),
             "sport_facilities": _safe(row.get("sport_facilities")),
             "park_mq_per_capita": _safe(row.get("park_mq_per_capita")),
+            # Airbnb (Inside Airbnb 2025-09-22)
+            "airbnb_total": _safe(row.get("total_listings")),
+            "airbnb_per_1000": _safe(row.get("airbnb_per_1000")),
+            "entire_per_1000": _safe(row.get("entire_per_1000")),
+            "airbnb_commercial_share": _safe(row.get("commercial_share")),
+            "airbnb_multi_host": _safe(row.get("multi_host_share")),
+            "airbnb_median_price": _safe(row.get("median_price")),
+            # ZTL / Aree Pedonali (Comune di Milano)
+            "pct_ap": _safe(row.get("pct_ap")),
+            "pct_quiet": _safe(row.get("pct_quiet")),
         }
 
         # --- Narrative ---

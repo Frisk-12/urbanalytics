@@ -527,6 +527,23 @@ function renderLeft(){
     if(s.connectivity!=null) h+=mr('Connettività TPL',Math.round(s.connectivity)+' ('+Math.round(s.metro_lines||0)+' linee metro, '+Math.round(s.tpl_lines||0)+' linee bus/tram)',s.connectivity>20?'blue':'muted');
     if(s.sport_facilities!=null) h+=mr('Impianti sportivi',Math.round(s.sport_facilities),'muted');
     if(s.park_mq_per_capita!=null && s.park_mq_per_capita>0) h+=mr('Parchi',s.park_mq_per_capita.toFixed(1)+' mq/ab','muted');
+    if(s.pct_ap!=null && s.pct_ap>0) {
+      const apPct = (s.pct_ap*100).toFixed(1);
+      const quietPct = s.pct_quiet!=null ? (s.pct_quiet*100).toFixed(1) : apPct;
+      h+=mr('Aree pedonali', apPct+'% superficie NIL', s.pct_ap>0.02?'blue':'muted');
+    }
+  }
+
+  // --- Airbnb / Turismo ---
+  if(s.airbnb_total!=null && s.airbnb_total>0) {
+    const pressureLevel = s.entire_per_1000>40?'down':s.entire_per_1000>20?'muted':'up';
+    const pressureLabel = s.entire_per_1000>40?'🔴 Alta':'🟡 Media';
+    h+=`<div class="sec">Pressione turistica (Airbnb 2025)</div>`;
+    h+=mr('Annunci totali',Math.round(s.airbnb_total),'muted');
+    h+=mr('Interi ap./1000 ab.',s.entire_per_1000!=null?s.entire_per_1000.toFixed(1):'—',pressureLevel);
+    if(s.airbnb_commercial_share!=null) h+=mr('Affitti brevi commerciali',(s.airbnb_commercial_share*100).toFixed(0)+'%',s.airbnb_commercial_share>.25?'down':'muted');
+    if(s.airbnb_multi_host!=null) h+=mr('Host professionali',(s.airbnb_multi_host*100).toFixed(0)+'%',s.airbnb_multi_host>.5?'down':'muted');
+    if(s.airbnb_median_price!=null) h+=mr('Prezzo mediano notte','€'+Math.round(s.airbnb_median_price),'muted');
   }
 
   // --- Demographics ---
